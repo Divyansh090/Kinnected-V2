@@ -1,6 +1,9 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
+import { authOptions } from "@/lib/auth";
+import { getServerSession } from "next-auth";
+import SessionProviderWrapper from "./SessionProviderWrapper";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -17,17 +20,18 @@ export const metadata: Metadata = {
   description: "Kinnected is a private digital space to connect generations of a family, visualize relationships, and preserve memories securely.",
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const session = await getServerSession(authOptions);
   return (
     <html lang="en">
-      <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased`}
-      >
-        {children}
+      <body>
+        <SessionProviderWrapper session={session}>
+          {children}
+        </SessionProviderWrapper>
       </body>
     </html>
   );
