@@ -87,7 +87,7 @@ export async function GET(req: NextRequest) {
 
     const profiles = await prisma.familyProfile.findMany({ where: { groupId } });
 
-    const memberList = groupMembers.map((m) => m.user);
+    const memberList = groupMembers.map((m: { user: any; }) => m.user);
 
     // ── Build real node map ────────────────────────────────────────────────
     const nodeMap = new Map<string, TreeNode>();
@@ -170,13 +170,13 @@ export async function GET(req: NextRequest) {
       }
 
       // Children
-      p.childrenNames.forEach((name, i) => {
+      p.childrenNames.forEach((name: string, i: number) => {
         const cid = p.childrenIds[i] || resolveId(name);
         addEdge(uid, cid, "parent");
       });
 
       // Siblings
-      p.siblingNames.forEach((name, i) => {
+      p.siblingNames.forEach((name: string, i: number) => {
         const sid = p.siblingIds[i] || resolveId(name);
         addEdge(uid, sid, "sibling");
       });

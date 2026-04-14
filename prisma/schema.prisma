@@ -1,6 +1,8 @@
+// prisma/schema.prisma
+// Add these models to your existing schema
 
 generator client {
-  provider = "prisma-client-js"
+  provider        = "prisma-client-js"
 }
 
 datasource db {
@@ -21,9 +23,12 @@ model User {
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 
-  groupMemberships GroupMember[]
-  ownedGroups      FamilyGroup[]   @relation("GroupAdmin")
-  familyProfiles   FamilyProfile[]
+  groupMemberships   GroupMember[]
+  ownedGroups        FamilyGroup[]    @relation("GroupAdmin")
+  familyProfiles     FamilyProfile[]
+  sentMessages       Message[]        @relation("MessageSender")
+  conversationsAs1   Conversation[]   @relation("ConversationUser1")
+  conversationsAs2   Conversation[]   @relation("ConversationUser2")
 }
 
 model FamilyGroup {
@@ -39,6 +44,7 @@ model FamilyGroup {
 
   members        GroupMember[]
   familyProfiles FamilyProfile[]
+  messages       Message[]       // group messages
 }
 
 model GroupMember {
@@ -53,40 +59,27 @@ model GroupMember {
   @@unique([userId, groupId])
 }
 
-// One profile per user per group — describes their family relations
 model FamilyProfile {
   id      String @id @default(cuid())
   userId  String
   groupId String
 
-  // Father
   fatherName String?
-  fatherId   String? // matched User.id in group (nullable)
-
-  // Mother
+  fatherId   String?
   motherName String?
   motherId   String?
-
-  // Spouse
   spouseName String?
   spouseId   String?
 
-  // Children — stored as JSON arrays
-  // e.g. ["Arjun", "Meera"]  and  ["clxxx1", null]
   childrenNames String[] @default([])
-  childrenIds   String[] @default([]) // parallel array, "" = unmatched
+  childrenIds   String[] @default([])
+  siblingNames  String[] @default([])
+  siblingIds    String[] @default([])
 
-  // Siblings
-  siblingNames String[] @default([])
-  siblingIds   String[] @default([])
-
-  // Grandparents (paternal)
   grandfatherPaternalName String?
   grandfatherPaternalId   String?
   grandmotherPaternalName String?
   grandmotherPaternalId   String?
-
-  // Grandparents (maternal)
   grandfatherMaternalName String?
   grandfatherMaternalId   String?
   grandmotherMaternalName String?
@@ -99,4 +92,46 @@ model FamilyProfile {
   group FamilyGroup @relation(fields: [groupId], references: [id])
 
   @@unique([userId, groupId])
+}
+
+// ── Chat Models ──────────────────────────────────────────────────────────────
+
+model Message {
+  id        String      @id @default(cuid())
+  content   String?     // text content (optional if image only)
+  imageUrl  String?     // Cloudinary URL
+  type      MessageType @default(TEXT)
+  createdAt DateTime    @default(now())
+
+  senderId  String
+  sender    User        @relation("MessageSender", fields: [senderId], references: [id])
+
+  // Either groupId (group chat) or conversationId (DM) — one must be set
+  groupId        String?
+  group          FamilyGroup?  @relation(fields: [groupId], references: [id])
+
+  conversationId String?
+  conversation   Conversation? @relation(fields: [conversationId], references: [id])
+}
+
+enum MessageType {
+  TEXT
+  IMAGE
+  TEXT_IMAGE
+}
+
+// DM conversation between exactly two users
+model Conversation {
+  id        String    @id @default(cuid())
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  user1Id   String
+  user2Id   String
+  user1     User      @relation("ConversationUser1", fields: [user1Id], references: [id])
+  user2     User      @relation("ConversationUser2", fields: [user2Id], references: [id])
+
+  messages  Message[]
+
+  @@unique([user1Id, user2Id])
 }

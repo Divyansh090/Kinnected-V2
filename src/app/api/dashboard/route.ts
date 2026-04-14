@@ -55,7 +55,7 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: "User not found" }, { status: 404 });
     }
 
-    const groups = user.groupMemberships.map((m) => m.group);
+    const groups = user.groupMemberships.map((m: { group: any; }) => m.group);
     const hasGroup = groups.length > 0;
 
     return NextResponse.json({

@@ -109,7 +109,7 @@ export async function POST(req: NextRequest) {
       where: { groupId, userId: { not: user.id } },
       include: { user: { select: { id: true, name: true } } },
     });
-    const memberList = groupMembers.map((m) => m.user);
+    const memberList = groupMembers.map((m: { user: any; }) => m.user);
 
     // Auto-match single names
     const fatherId   = matchNameToMember(fields.fatherName ?? "", memberList);

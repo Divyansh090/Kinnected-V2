@@ -30,7 +30,7 @@ export async function GET(req: NextRequest) {
       },
     });
 
-    const real = groupMembers.map((m) => ({
+    const real = groupMembers.map((m: { user: { id: any; name: any; profilePhoto: any; }; }) => ({
       id: m.user.id,
       name: m.user.name,
       profilePhoto: m.user.profilePhoto,
@@ -39,7 +39,7 @@ export async function GET(req: NextRequest) {
     // Ghost names — collect all names typed in existing family profiles
     const profiles = await prisma.familyProfile.findMany({ where: { groupId } });
 
-    const realNames = new Set(real.map((r) => r.name.trim().toLowerCase()));
+    const realNames = new Set(real.map((r: { name: string; }) => r.name.trim().toLowerCase()));
     const ghostSet  = new Set<string>();
 
     for (const p of profiles) {

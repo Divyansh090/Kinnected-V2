@@ -1,10 +1,9 @@
-// src/app/api/group/create/route.ts
-
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { nanoid } from "nanoid";
+import { Prisma } from "@prisma/client";
 
 export async function POST(req: NextRequest) {
   try {
@@ -36,7 +35,7 @@ export async function POST(req: NextRequest) {
     const inviteCode = nanoid(8).toUpperCase();
 
     // Create group + add creator as first member in a transaction
-    const group = await prisma.$transaction(async (tx) => {
+    const group = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       const newGroup = await tx.familyGroup.create({
         data: {
           name: name.trim(),
@@ -56,7 +55,10 @@ export async function POST(req: NextRequest) {
       });
 
       return newGroup;
-    });
+    },{
+      timeout: 30000 // 30 seconds
+    }
+  );
 
     return NextResponse.json(
       {

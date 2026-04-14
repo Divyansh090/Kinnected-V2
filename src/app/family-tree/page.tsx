@@ -29,80 +29,296 @@ interface PositionedNode extends TreeNode {
 
 // ── Layout ───────────────────────────────────────────────────────────────────
 
-const NODE_W = 130;
-const NODE_H = 150;
-const GAP_X  = 70;
-const GAP_Y  = 130;
+const NODE_W     = 130;
+const NODE_H     = 150;
+const GAP_X      = 60;
+const COUPLE_GAP = 20;
+const GAP_Y      = 140;
 
-// How many layers is the "to" node relative to "from"?
-// Edge meaning: from→to where relation describes "from IS relation OF to"
-// e.g. "parent" edge: from=parent, to=child → parent is ABOVE child → delta = -1
-// So to get "to" layer from "from" layer: to = from + delta
-function layerDelta(relation: string): number {
-  switch (relation) {
-    case "grandparent": return +2; // grandparent is 2 layers ABOVE the child
-    case "parent":      return +1; // parent is 1 layer ABOVE the child
-    case "spouse":      return  0;
-    case "sibling":     return  0;
-    default:            return  0;
-  }
+interface SingleSlot { type: "single"; id: string; }
+interface CoupleSlot { type: "couple"; left: string; right: string; }
+type Slot = SingleSlot | CoupleSlot;
+
+function slotWidth(slot: Slot): number {
+  return slot.type === "couple" ? NODE_W + COUPLE_GAP + NODE_W : NODE_W;
 }
 
 function layoutNodes(nodes: TreeNode[], edges: TreeEdge[]): PositionedNode[] {
   if (nodes.length === 0) return [];
 
-  // BFS to assign layers
-  const layerMap = new Map<string, number>();
-  const visited  = new Set<string>();
-  const start    = nodes.find((n) => n.isCurrentUser) ?? nodes[0];
+  // ── Build relationship maps ───────────────────────────────────────────────
+  const spouseOf   = new Map<string, string>();
+  const parentsOf  = new Map<string, string[]>(); // childId  → parentIds
+  const childrenOf = new Map<string, string[]>(); // parentId → childIds (deduped)
 
-  layerMap.set(start.id, 0);
-  visited.add(start.id);
-  const queue = [start.id];
-
-  while (queue.length > 0) {
-    const curr      = queue.shift()!;
-    const currLayer = layerMap.get(curr)!;
-
-    for (const e of edges) {
-      // "parent" edge: e.from = parent (above), e.to = child (below)
-      // If curr is the CHILD (e.to), the parent (e.from) goes ABOVE → layer - delta
-      if (e.to === curr && !visited.has(e.from)) {
-        layerMap.set(e.from, currLayer - layerDelta(e.relation));
-        visited.add(e.from);
-        queue.push(e.from);
-      }
-      // If curr is the PARENT (e.from), the child (e.to) goes BELOW → layer + delta
-      if (e.from === curr && !visited.has(e.to)) {
-        layerMap.set(e.to, currLayer + layerDelta(e.relation));
-        visited.add(e.to);
-        queue.push(e.to);
-      }
+  edges.forEach((e) => {
+    if (e.relation === "spouse") {
+      spouseOf.set(e.from, e.to);
+      spouseOf.set(e.to, e.from);
     }
+    if (e.relation === "parent" || e.relation === "grandparent") {
+      if (!childrenOf.has(e.from)) childrenOf.set(e.from, []);
+      if (!childrenOf.get(e.from)!.includes(e.to))
+        childrenOf.get(e.from)!.push(e.to);
+      if (!parentsOf.has(e.to)) parentsOf.set(e.to, []);
+      if (!parentsOf.get(e.to)!.includes(e.from))
+        parentsOf.get(e.to)!.push(e.from);
+    }
+  });
+
+  const allIds = nodes.map((n) => n.id);
+
+  // ── Assign layers via topological sort ────────────────────────────────────
+  // Build directed edges: parent → child means parent has lower layer
+  const inDegree = new Map<string, number>();
+  allIds.forEach((id) => inDegree.set(id, 0));
+
+  // Only count PARENT→CHILD edges for layer assignment (not spouse/sibling)
+  allIds.forEach((id) => {
+    (childrenOf.get(id) ?? []).forEach((childId) => {
+      inDegree.set(childId, (inDegree.get(childId) ?? 0) + 1);
+    });
+    (parentsOf.get(id) ?? []).forEach((parentId) => {
+      if (allIds.includes(parentId)) {
+        inDegree.set(id, (inDegree.get(id) ?? 0) + 1);
+      }
+    });
+  });
+
+  // Re-compute cleanly: for each node, count unique "above" constraints
+  const aboveEdges = new Map<string, Set<string>>(); // child → Set<parent>
+  allIds.forEach((id) => aboveEdges.set(id, new Set()));
+
+  allIds.forEach((id) => {
+    (childrenOf.get(id) ?? []).forEach((childId) => {
+      aboveEdges.get(childId)!.add(id);
+    });
+    (parentsOf.get(id) ?? []).filter((p) => allIds.includes(p)).forEach((parentId) => {
+      aboveEdges.get(id)!.add(parentId);
+    });
+  });
+
+  // Kahn BFS for longest-path layering
+  const layerOf = new Map<string, number>();
+  const deg     = new Map<string, number>();
+  allIds.forEach((id) => deg.set(id, aboveEdges.get(id)!.size));
+
+  const topoQ: string[] = [];
+  allIds.forEach((id) => { if (deg.get(id) === 0) { layerOf.set(id, 0); topoQ.push(id); } });
+
+  while (topoQ.length > 0) {
+    const curr = topoQ.shift()!;
+    const cl   = layerOf.get(curr) ?? 0;
+    // Propagate to children
+    (childrenOf.get(curr) ?? []).forEach((childId) => {
+      layerOf.set(childId, Math.max(layerOf.get(childId) ?? 0, cl + 1));
+      const newDeg = (deg.get(childId) ?? 1) - 1;
+      deg.set(childId, newDeg);
+      if (newDeg === 0) topoQ.push(childId);
+    });
   }
 
-  // Any disconnected nodes → same layer as start
-  nodes.forEach((n) => { if (!layerMap.has(n.id)) layerMap.set(n.id, 0); });
+  // Unvisited fallback
+  allIds.forEach((id) => { if (!layerOf.has(id)) layerOf.set(id, 0); });
 
-  // Group by layer
+  // Spouses/siblings: force same layer (max of pair), stabilise with passes
+  for (let pass = 0; pass < 10; pass++) {
+    let changed = false;
+    edges.forEach((e) => {
+      if (e.relation !== "spouse" && e.relation !== "sibling") return;
+      const la = layerOf.get(e.from) ?? 0;
+      const lb = layerOf.get(e.to)   ?? 0;
+      if (la !== lb) {
+        const mx = Math.max(la, lb);
+        layerOf.set(e.from, mx);
+        layerOf.set(e.to,   mx);
+        changed = true;
+      }
+    });
+    if (!changed) break;
+  }
+
+  // ── Build couple units ────────────────────────────────────────────────────
+  // A "unit" is either a couple [left, right] or a single [id]
+  // coupleKey: sorted "idA|idB"
+  const getCoupleKey = (id: string): string => {
+    const partner = spouseOf.get(id);
+    return partner ? [id, partner].sort().join("|") : id;
+  };
+
+  // ── For each unit, collect its children ───────────────────────────────────
+  // childId → coupleKey of parent
+  const unitChildren = new Map<string, string[]>(); // coupleKey → childIds[]
+  const assignedToUnit = new Set<string>();
+
+  // Process all nodes that have parents
+  allIds.forEach((childId) => {
+    if (assignedToUnit.has(childId)) return;
+    const myParents = (parentsOf.get(childId) ?? []).filter((p) => allIds.includes(p));
+    const myParentEdgeFroms = (childrenOf.get("") ?? []); // unused
+    
+    // Also check who lists this node as child
+    const parentsThatListMe = allIds.filter((pid) =>
+      (childrenOf.get(pid) ?? []).includes(childId)
+    );
+    
+    const allMyParents = [...new Set([...myParents, ...parentsThatListMe])];
+    if (allMyParents.length === 0) return;
+
+    // Find a parent with a spouse to form couple key
+    let unitKey = allMyParents[0];
+    for (const pid of allMyParents) {
+      const partner = spouseOf.get(pid);
+      if (partner && allIds.includes(partner)) {
+        unitKey = [pid, partner].sort().join("|");
+        break;
+      }
+    }
+
+    if (!unitChildren.has(unitKey)) unitChildren.set(unitKey, []);
+    if (!unitChildren.get(unitKey)!.includes(childId))
+      unitChildren.get(unitKey)!.push(childId);
+    assignedToUnit.add(childId);
+  });
+
+  // ── Bottom-up width calculation ───────────────────────────────────────────
+  // Each unit needs at least enough width for its own slot,
+  // but grows to accommodate all its children's total width.
+  const unitWidth = new Map<string, number>(); // coupleKey/singleId → pixel width
+
+  const getUnitWidth = (unitKey: string): number => {
+    if (unitWidth.has(unitKey)) return unitWidth.get(unitKey)!;
+
+    // Own slot width
+    const ids = unitKey.includes("|") ? unitKey.split("|") : [unitKey];
+    const ownW = ids.length === 2
+      ? NODE_W + COUPLE_GAP + NODE_W
+      : NODE_W;
+
+    // Children total width
+    const children = unitChildren.get(unitKey) ?? [];
+    if (children.length === 0) {
+      unitWidth.set(unitKey, ownW);
+      return ownW;
+    }
+
+    // Each child belongs to its own unit — get those units
+    const childUnitKeys = [...new Set(children.map((cid) => getCoupleKey(cid)))];
+    const childrenTotalW = childUnitKeys.reduce((sum, cuk, i) =>
+      sum + getUnitWidth(cuk) + (i > 0 ? GAP_X : 0), 0
+    );
+
+    const w = Math.max(ownW, childrenTotalW);
+    unitWidth.set(unitKey, w);
+    return w;
+  };
+
+  // ── Group by layer and position ───────────────────────────────────────────
   const byLayer = new Map<number, string[]>();
-  layerMap.forEach((layer, id) => {
+  layerOf.forEach((layer, id) => {
     if (!byLayer.has(layer)) byLayer.set(layer, []);
     byLayer.get(layer)!.push(id);
   });
 
-  const sortedLayers = Array.from(byLayer.keys()).sort((a, b) => a - b);
   const posMap       = new Map<string, { x: number; y: number }>();
+  const sortedLayers = Array.from(byLayer.keys()).sort((a, b) => a - b);
 
   sortedLayers.forEach((layer, li) => {
-    const ids    = byLayer.get(layer)!;
-    const totalW = ids.length * NODE_W + (ids.length - 1) * GAP_X;
-    const startX = -totalW / 2 + NODE_W / 2;
-    ids.forEach((id, i) => {
-      posMap.set(id, {
-        x: startX + i * (NODE_W + GAP_X),
-        y: li * (NODE_H + GAP_Y),
+    const ids = byLayer.get(layer)!;
+    const y   = li * (NODE_H + GAP_Y);
+
+    // Build ordered list of nodes for this layer
+    let orderedIds: string[];
+
+    if (li === 0) {
+      orderedIds = [...ids];
+    } else {
+      // Group nodes by their parent unit, sorted by parent X position
+      const groups = new Map<string, string[]>(); // parentUnitKey → nodeIds
+
+      ids.forEach((id) => {
+        const myParents = (parentsOf.get(id) ?? []).filter((p) => allIds.includes(p));
+        const parentsThatListMe = allIds.filter((pid) =>
+          (childrenOf.get(pid) ?? []).includes(id)
+        );
+        const allMyParents = [...new Set([...myParents, ...parentsThatListMe])];
+
+        let unitKey = "__orphan__";
+        if (allMyParents.length > 0) {
+          unitKey = allMyParents[0];
+          for (const pid of allMyParents) {
+            const partner = spouseOf.get(pid);
+            if (partner && allIds.includes(partner)) {
+              unitKey = [pid, partner].sort().join("|");
+              break;
+            }
+          }
+        }
+
+        if (!groups.has(unitKey)) groups.set(unitKey, []);
+        groups.get(unitKey)!.push(id);
       });
+
+      // Sort groups by parent X
+      const sortedGroups = Array.from(groups.entries()).sort(([kA], [kB]) => {
+        const getX = (k: string) => {
+          if (k === "__orphan__") return 99999;
+          const pid = k.split("|")[0];
+          return posMap.get(pid)?.x ?? 0;
+        };
+        return getX(kA) - getX(kB);
+      });
+
+      orderedIds = [];
+      sortedGroups.forEach(([, gids]) => orderedIds.push(...gids));
+    }
+
+    // Build slots pairing spouses
+    const slots: Slot[]  = [];
+    const slotPlaced = new Set<string>();
+
+    orderedIds.forEach((id) => {
+      if (slotPlaced.has(id)) return;
+      const partner = spouseOf.get(id);
+      if (partner && orderedIds.includes(partner) && !slotPlaced.has(partner)) {
+        const iA = orderedIds.indexOf(id);
+        const iB = orderedIds.indexOf(partner);
+        const [l, r] = iA <= iB ? [id, partner] : [partner, id];
+        slots.push({ type: "couple", left: l, right: r });
+        slotPlaced.add(l); slotPlaced.add(r);
+      } else if (!slotPlaced.has(id)) {
+        slots.push({ type: "single", id });
+        slotPlaced.add(id);
+      }
+    });
+
+    // Assign X positions with dynamic spacing based on subtree widths
+    const totalW = slots.reduce((sum, slot, i) => {
+      const unitKey = slot.type === "couple"
+        ? [slot.left, slot.right].sort().join("|")
+        : slot.id;
+      const w = Math.max(slotWidth(slot), getUnitWidth(unitKey));
+      return sum + w + (i > 0 ? GAP_X : 0);
+    }, 0);
+
+    let curX = -totalW / 2;
+
+    slots.forEach((slot) => {
+      const unitKey = slot.type === "couple"
+        ? [slot.left, slot.right].sort().join("|")
+        : slot.id;
+      const allocatedW = Math.max(slotWidth(slot), getUnitWidth(unitKey));
+      const slotW      = slotWidth(slot);
+      // Centre the couple/single within its allocated space
+      const offset     = (allocatedW - slotW) / 2;
+
+      if (slot.type === "couple") {
+        posMap.set(slot.left,  { x: curX + offset,                        y });
+        posMap.set(slot.right, { x: curX + offset + NODE_W + COUPLE_GAP,  y });
+      } else {
+        posMap.set(slot.id, { x: curX + offset, y });
+      }
+      curX += allocatedW + GAP_X;
     });
   });
 
@@ -112,6 +328,7 @@ function layoutNodes(nodes: TreeNode[], edges: TreeEdge[]): PositionedNode[] {
     y: posMap.get(n.id)?.y ?? 0,
   }));
 }
+
 
 // ── Avatar ───────────────────────────────────────────────────────────────────
 
@@ -372,76 +589,156 @@ export default function FamilyTreePage() {
 
               {/* ── Edges — clean hierarchical connectors ── */}
               {(() => {
-                const SPOUSE_COLOR = "rgba(201,120,58,0.7)";
-                const CHILD_COLOR  = "rgba(90,158,114,0.65)";
+                const SPOUSE_COLOR = "rgba(201,120,58,0.85)";
+                const CHILD_COLOR  = "rgba(90,158,114,0.75)";
                 const SW           = 2;
-
                 const paths: React.ReactNode[] = [];
 
-                // ── STEP 1: Find all couple pairs ────────────────────────────
-                // coupleMidX: the X midpoint of the spouse line (where child drop starts)
-                const spouseEdges = edges.filter((e) => e.relation === "spouse");
-
-                // Map: "nodeId" → partner nodeId (for quick lookup)
+                // ── Build lookup maps ──────────────────────────────────────
                 const partnerOf = new Map<string, string>();
-                spouseEdges.forEach((e) => {
+                edges.filter((e) => e.relation === "spouse").forEach((e) => {
                   partnerOf.set(e.from, e.to);
-                  partnerOf.set(e.to, e.from);
+                  partnerOf.set(e.to,   e.from);
                 });
 
-                // Draw all spouse lines first
-                spouseEdges.forEach((e, i) => {
+                // ── Collect children per COUPLE using positioned nodes ─────
+                // Strategy: for each child node, find ALL parents from edges.
+                // Then pick the canonical couple key (sorted parent IDs).
+                // This way it doesn't matter which parent edge is processed first
+                // — the same couple key is always generated.
+                const childrenOfCouple = new Map<string, string[]>();
+                const childrenOfSingle = new Map<string, string[]>();
+                const assignedChild    = new Set<string>();
+
+                const parentEdges = edges.filter(
+                  (e) => e.relation === "parent" || e.relation === "grandparent"
+                );
+
+                // Build: childId → all parentIds from edges
+                const allParentsOfChild = new Map<string, string[]>();
+                parentEdges.forEach((e) => {
+                  if (!allParentsOfChild.has(e.to)) allParentsOfChild.set(e.to, []);
+                  if (!allParentsOfChild.get(e.to)!.includes(e.from))
+                    allParentsOfChild.get(e.to)!.push(e.from);
+                });
+
+                // For each child, determine its couple/single parent group
+                allParentsOfChild.forEach((parentIds, childId) => {
+                  if (assignedChild.has(childId)) return;
+
+                  // Find the primary parent — one that exists as a node
+                  const knownParents = parentIds.filter((pid) =>
+                    nodes.find((n) => n.id === pid)
+                  );
+
+                  if (knownParents.length === 0) return;
+
+                  // Check if any known parent has a partner
+                  let coupleKey: string | null = null;
+                  for (const pid of knownParents) {
+                    const partner = partnerOf.get(pid);
+                    if (partner && nodes.find((n) => n.id === partner)) {
+                      // Use sorted couple key so Test4+Test8 always = same key
+                      coupleKey = [pid, partner].sort().join("|");
+                      break;
+                    }
+                  }
+
+                  if (coupleKey) {
+                    if (!childrenOfCouple.has(coupleKey)) childrenOfCouple.set(coupleKey, []);
+                    if (!childrenOfCouple.get(coupleKey)!.includes(childId))
+                      childrenOfCouple.get(coupleKey)!.push(childId);
+                  } else {
+                    const pid = knownParents[0];
+                    if (!childrenOfSingle.has(pid)) childrenOfSingle.set(pid, []);
+                    if (!childrenOfSingle.get(pid)!.includes(childId))
+                      childrenOfSingle.get(pid)!.push(childId);
+                  }
+                  assignedChild.add(childId);
+                });
+
+                // Helper: draw the T-bar from a midpoint down to a list of children
+                const drawChildDrop = (
+                  fromX: number, fromY: number,
+                  children: PositionedNode[], keyPrefix: string
+                ) => {
+                  if (children.length === 0) return;
+                  const childTopY = Math.min(...children.map((c) => c.y));
+                  const barY      = fromY + (childTopY - fromY) * 0.5;
+
+                  // Vertical line from source down to bar
+                  paths.push(
+                    <line key={`${keyPrefix}-vdrop`}
+                      x1={fromX} y1={fromY} x2={fromX} y2={barY}
+                      stroke={CHILD_COLOR} strokeWidth={SW} />
+                  );
+
+                  if (children.length === 1) {
+                    // Single child — elbow: horizontal then vertical
+                    const cx = children[0].x + NODE_W / 2;
+                    if (cx !== fromX) {
+                      paths.push(
+                        <line key={`${keyPrefix}-elbow-h`}
+                          x1={fromX} y1={barY} x2={cx} y2={barY}
+                          stroke={CHILD_COLOR} strokeWidth={SW} />
+                      );
+                    }
+                    paths.push(
+                      <line key={`${keyPrefix}-elbow-v`}
+                        x1={cx} y1={barY} x2={cx} y2={children[0].y}
+                        stroke={CHILD_COLOR} strokeWidth={SW} />
+                    );
+                  } else {
+                    // Multiple children — horizontal bar spanning all, then drops
+                    const xs  = children.map((c) => c.x + NODE_W / 2);
+                    const x1h = Math.min(...xs);
+                    const x2h = Math.max(...xs);
+                    paths.push(
+                      <line key={`${keyPrefix}-hbar`}
+                        x1={x1h} y1={barY} x2={x2h} y2={barY}
+                        stroke={CHILD_COLOR} strokeWidth={SW} />
+                    );
+                    children.forEach((child, ci) => {
+                      const cx = child.x + NODE_W / 2;
+                      paths.push(
+                        <line key={`${keyPrefix}-drop-${ci}`}
+                          x1={cx} y1={barY} x2={cx} y2={child.y}
+                          stroke={CHILD_COLOR} strokeWidth={SW} />
+                      );
+                    });
+                  }
+                };
+
+                // ── Draw spouse lines ──────────────────────────────────────
+                const drawnSpouses = new Set<string>();
+                edges.filter((e) => e.relation === "spouse").forEach((e, i) => {
+                  const pairKey = [e.from, e.to].sort().join("|");
+                  if (drawnSpouses.has(pairKey)) return;
+                  drawnSpouses.add(pairKey);
+
                   const a = nodes.find((n) => n.id === e.from);
                   const b = nodes.find((n) => n.id === e.to);
                   if (!a || !b) return;
 
-                  // Sort left-to-right
-                  const [left, right] = a.x < b.x ? [a, b] : [b, a];
-                  const y   = left.y + NODE_H / 2;
-                  const x1s = left.x  + NODE_W;
-                  const x2s = right.x;
-                  const mx  = (x1s + x2s) / 2;
+                  const [left, right] = a.x <= b.x ? [a, b] : [b, a];
+                  const lineY = left.y + NODE_H / 2;
+                  const x1s   = left.x  + NODE_W;
+                  const x2s   = right.x;
+                  const mx    = left.x + NODE_W + COUPLE_GAP / 2;
 
                   paths.push(
-                    <g key={`spouse-${i}`}>
-                      {/* Horizontal spouse line */}
-                      <line x1={x1s} y1={y} x2={x2s} y2={y}
+                    <g key={`spouse-${pairKey}`}>
+                      <line x1={x1s} y1={lineY} x2={x2s} y2={lineY}
                         stroke={SPOUSE_COLOR} strokeWidth={SW}
                         strokeDasharray={e.confirmed ? "none" : "6,4"}
-                        opacity={e.confirmed ? 0.8 : 0.4} />
-                      {/* Centre dot — this is where children drop from */}
-                      <circle cx={mx} cy={y} r="4"
-                        fill={SPOUSE_COLOR} opacity="0.9" />
+                        opacity={e.confirmed ? 1 : 0.45} />
+                      <circle cx={mx} cy={lineY} r="4"
+                        fill={SPOUSE_COLOR} opacity="1" />
                     </g>
                   );
                 });
 
-                // ── STEP 2: Build children map ───────────────────────────────
-                // For each parent node, collect their children from "parent"/"grandparent" edges
-                const parentEdges = edges.filter((e) => e.relation === "parent" || e.relation === "grandparent");
-
-                // childrenOfCouple: coupleKey → childIds[]
-                // coupleKey = sorted "idA|idB"
-                const childrenOfCouple = new Map<string, string[]>();
-                // childrenOfSingle: parentId → childIds[] (no known spouse)
-                const childrenOfSingle = new Map<string, string[]>();
-
-                parentEdges.forEach((e) => {
-                  const partnerId = partnerOf.get(e.from);
-                  if (partnerId) {
-                    const key = [e.from, partnerId].sort().join("|");
-                    if (!childrenOfCouple.has(key)) childrenOfCouple.set(key, []);
-                    // Avoid duplicate children (both parents may have the same edge)
-                    if (!childrenOfCouple.get(key)!.includes(e.to))
-                      childrenOfCouple.get(key)!.push(e.to);
-                  } else {
-                    if (!childrenOfSingle.has(e.from)) childrenOfSingle.set(e.from, []);
-                    if (!childrenOfSingle.get(e.from)!.includes(e.to))
-                      childrenOfSingle.get(e.from)!.push(e.to);
-                  }
-                });
-
-                // ── STEP 3: Draw couple → children drops ─────────────────────
+                // ── Draw couple → children ────────────────────────────────
                 childrenOfCouple.forEach((childIds, coupleKey) => {
                   const [idA, idB] = coupleKey.split("|");
                   const a = nodes.find((n) => n.id === idA);
@@ -453,59 +750,14 @@ export default function FamilyTreePage() {
                     .filter(Boolean) as PositionedNode[];
                   if (children.length === 0) return;
 
-                  // Midpoint of spouse line
-                  const [left, right] = a.x < b.x ? [a, b] : [b, a];
-                  const spouseY = left.y + NODE_H / 2;
-                  const mx      = (left.x + NODE_W + right.x) / 2;
+                  const [left] = a.x <= b.x ? [a, b] : [b, a];
+                  const mx     = left.x + NODE_W + COUPLE_GAP / 2;
+                  const fromY  = left.y + NODE_H / 2; // centre of spouse line
 
-                  // Bar Y — halfway between spouse line and children tops
-                  const childTopY = Math.min(...children.map((c) => c.y));
-                  const barY      = spouseY + (childTopY - spouseY) * 0.55;
-
-                  // Vertical drop from couple dot down to bar
-                  paths.push(
-                    <line key={`cv-drop-${coupleKey}`}
-                      x1={mx} y1={spouseY} x2={mx} y2={barY}
-                      stroke={CHILD_COLOR} strokeWidth={SW} />
-                  );
-
-                  if (children.length === 1) {
-                    // Single child: straight line from bar to child top
-                    const cx = children[0].x + NODE_W / 2;
-                    paths.push(
-                      <line key={`cv-single-${coupleKey}`}
-                        x1={mx} y1={barY} x2={cx} y2={barY}
-                        stroke={CHILD_COLOR} strokeWidth={SW} />,
-                      <line key={`cv-down-${coupleKey}`}
-                        x1={cx} y1={barY} x2={cx} y2={children[0].y}
-                        stroke={CHILD_COLOR} strokeWidth={SW} />
-                    );
-                  } else {
-                    // Multiple children: horizontal bar then drops
-                    const xs  = children.map((c) => c.x + NODE_W / 2);
-                    const x1h = Math.min(...xs);
-                    const x2h = Math.max(...xs);
-
-                    // Horizontal bar
-                    paths.push(
-                      <line key={`hbar-${coupleKey}`}
-                        x1={x1h} y1={barY} x2={x2h} y2={barY}
-                        stroke={CHILD_COLOR} strokeWidth={SW} />
-                    );
-
-                    // Vertical drop to each child
-                    children.forEach((child, ci) => {
-                      const cx = child.x + NODE_W / 2;
-                      paths.push(
-                        <line key={`cdrop-${coupleKey}-${ci}`}
-                          x1={cx} y1={barY} x2={cx} y2={child.y}
-                          stroke={CHILD_COLOR} strokeWidth={SW} />
-                      );
-                    });
-                  }
+                  drawChildDrop(mx, fromY, children, `couple-${coupleKey}`);
                 });
 
-                // ── STEP 4: Single parent → children (no spouse) ─────────────
+                // ── Draw single parent → children ─────────────────────────
                 childrenOfSingle.forEach((childIds, parentId) => {
                   const parent = nodes.find((n) => n.id === parentId);
                   if (!parent) return;
@@ -515,47 +767,10 @@ export default function FamilyTreePage() {
                     .filter(Boolean) as PositionedNode[];
                   if (children.length === 0) return;
 
-                  const px       = parent.x + NODE_W / 2;
-                  const py       = parent.y + NODE_H;
-                  const childTopY = Math.min(...children.map((c) => c.y));
-                  const barY     = py + (childTopY - py) * 0.5;
+                  const fromX = parent.x + NODE_W / 2;
+                  const fromY = parent.y + NODE_H;
 
-                  // Vertical from parent bottom to bar
-                  paths.push(
-                    <line key={`sp-drop-${parentId}`}
-                      x1={px} y1={py} x2={px} y2={barY}
-                      stroke={CHILD_COLOR} strokeWidth={SW} />
-                  );
-
-                  if (children.length === 1) {
-                    const cx = children[0].x + NODE_W / 2;
-                    paths.push(
-                      <line key={`sp-h-${parentId}`}
-                        x1={px} y1={barY} x2={cx} y2={barY}
-                        stroke={CHILD_COLOR} strokeWidth={SW} />,
-                      <line key={`sp-v-${parentId}`}
-                        x1={cx} y1={barY} x2={cx} y2={children[0].y}
-                        stroke={CHILD_COLOR} strokeWidth={SW} />
-                    );
-                  } else {
-                    const xs  = children.map((c) => c.x + NODE_W / 2);
-                    const x1h = Math.min(...xs);
-                    const x2h = Math.max(...xs);
-
-                    paths.push(
-                      <line key={`sp-hbar-${parentId}`}
-                        x1={x1h} y1={barY} x2={x2h} y2={barY}
-                        stroke={CHILD_COLOR} strokeWidth={SW} />
-                    );
-                    children.forEach((child, ci) => {
-                      const cx = child.x + NODE_W / 2;
-                      paths.push(
-                        <line key={`sp-cdrop-${parentId}-${ci}`}
-                          x1={cx} y1={barY} x2={cx} y2={child.y}
-                          stroke={CHILD_COLOR} strokeWidth={SW} />
-                      );
-                    });
-                  }
+                  drawChildDrop(fromX, fromY, children, `single-${parentId}`);
                 });
 
                 return paths;

@@ -42,20 +42,20 @@ export async function GET(req: NextRequest) {
     });
 
     // Get existing relationships set by the current user
-    const existingRelationships = await prisma.relationship.findMany({
-      where: { groupId, fromUserId: user.id },
-      select: { toUserId: true, relation: true },
-    });
+    // const existingRelationships = await prisma.relationship.findMany({
+    //   where: { groupId, fromUserId: user.id },
+    //   select: { toUserId: true, relation: true },
+    // });
 
-    const relationMap: Record<string, string> = {};
-    existingRelationships.forEach((r) => {
-      relationMap[r.toUserId] = r.relation;
-    });
+    // const relationMap: Record<string, string> = {};
+    // existingRelationships.forEach((r: { toUserId: string | number; relation: string; }) => {
+    //   relationMap[r.toUserId] = r.relation;
+    // });
 
     return NextResponse.json({
-      members: members.map((m) => ({
+      members: members.map((m: { user: { id: string | number; }; }) => ({
         ...m.user,
-        existingRelation: relationMap[m.user.id] || null,
+        // existingRelation: relationMap[m.user.id] || null,
       })),
       currentUserId: user.id,
     });
@@ -111,45 +111,45 @@ export async function POST(req: NextRequest) {
       Spouse: "Spouse",
     };
 
-    await prisma.$transaction(
-      relationships.map(({ toUserId, relation }: { toUserId: string; relation: string }) =>
-        prisma.relationship.upsert({
-          where: {
-            groupId_fromUserId_toUserId: {
-              groupId,
-              fromUserId: user.id,
-              toUserId,
-            },
-          },
-          update: { relation },
-          create: { groupId, fromUserId: user.id, toUserId, relation },
-        })
-      )
-    );
+    // await prisma.$transaction(
+    //   relationships.map(({ toUserId, relation }: { toUserId: string; relation: string }) =>
+    //     prisma.relationship.upsert({
+    //       where: {
+    //         groupId_fromUserId_toUserId: {
+    //           groupId,
+    //           fromUserId: user.id,
+    //           toUserId,
+    //         },
+    //       },
+    //       update: { relation },
+    //       create: { groupId, fromUserId: user.id, toUserId, relation },
+    //     })
+    //   )
+    // );
 
-    // Auto-create reverse relationships (only if not already set)
-    const reverseOps = relationships
-      .filter(({ relation }: { relation: string }) => REVERSE_MAP[relation])
-      .map(({ toUserId, relation }: { toUserId: string; relation: string }) =>
-        prisma.relationship.upsert({
-          where: {
-            groupId_fromUserId_toUserId: {
-              groupId,
-              fromUserId: toUserId,
-              toUserId: user.id,
-            },
-          },
-          update: {}, // don't overwrite if already set manually
-          create: {
-            groupId,
-            fromUserId: toUserId,
-            toUserId: user.id,
-            relation: REVERSE_MAP[relation],
-          },
-        })
-      );
+    // // Auto-create reverse relationships (only if not already set)
+    // const reverseOps = relationships
+    //   .filter(({ relation }: { relation: string }) => REVERSE_MAP[relation])
+    //   .map(({ toUserId, relation }: { toUserId: string; relation: string }) =>
+    //     prisma.relationship.upsert({
+    //       where: {
+    //         groupId_fromUserId_toUserId: {
+    //           groupId,
+    //           fromUserId: toUserId,
+    //           toUserId: user.id,
+    //         },
+    //       },
+    //       update: {}, // don't overwrite if already set manually
+    //       create: {
+    //         groupId,
+    //         fromUserId: toUserId,
+    //         toUserId: user.id,
+    //         relation: REVERSE_MAP[relation],
+    //       },
+    //     })
+    //   );
 
-    await prisma.$transaction(reverseOps);
+    // await prisma.$transaction(reverseOps);
 
     return NextResponse.json({ message: "Relationships saved successfully!" });
   } catch (error) {
