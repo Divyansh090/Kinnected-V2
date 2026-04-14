@@ -4,6 +4,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { Prisma } from "@prisma/client";
 
 export interface TreeNode {
   id: string;
@@ -21,6 +22,8 @@ export interface TreeEdge {
   relation: string;
   confirmed: boolean;
 }
+
+
 
 // ── Name normalisation ────────────────────────────────────────────────────────
 function normName(name: string): string {
@@ -92,7 +95,7 @@ export async function GET(req: NextRequest) {
     // ── Build real node map ────────────────────────────────────────────────
     const nodeMap = new Map<string, TreeNode>();
 
-    groupMembers.forEach((m) => {
+    groupMembers.forEach((m: { user: any; }) => {
       nodeMap.set(m.user.id, {
         id: m.user.id,
         name: m.user.name,
